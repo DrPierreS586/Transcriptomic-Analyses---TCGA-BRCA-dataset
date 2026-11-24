@@ -1,4 +1,7 @@
-################Threshold Validation (ER/PR/HER2 cutoffs for TCGA-BRCA PAM50 Basal/Normal like Patients) - Pierre SARR - March 18, 2025################
+# ############################################# THRESHOLD VALIDATION #############################################
+# ER/PR/HER2 Expression Cutoffs for Identifying TNBC Among TCGA-BRCA PAM50 Basal-like and Normal-like Patients
+# #################################################################################################################
+
 
 rm(list = ls())
 
@@ -13,7 +16,7 @@ library(gridExtra)
 library(dplyr)
 
 # ============================================================
-# UPLOAD DATA
+# LOAD DATA
 # ============================================================
 
 path <- "/Users/drpierred.sarr/Desktop/PAM50 Bas-Norm like for TNBC prediction.xlsx"
@@ -27,10 +30,12 @@ cat("Premières colonnes :", colnames(df_Basal)[1:5], "\n")
 cat("Premiers gènes     :", head(df_Basal$Gene), "\n")
 
 # ============================================================
-# EXTRAIRE ESR1, PGR, ERBB2
+# EXTRACT ESR1, PGR AND ERBB2 EXPRESSION VALUES
 # ============================================================
 
-# Gènes en lignes → extraire valeurs numériques par gène
+# Genes are organized in rows; extract numerical expression
+# values for each gene across all samples.
+
 get_expr <- function(df, gene) {
   row <- df %>% dplyr::filter(Gene == gene)
   if (nrow(row) == 0) {
@@ -48,13 +53,13 @@ ESR1_Normal  <- get_expr(df_Normal, "ESR1")
 PGR_Normal   <- get_expr(df_Normal, "PGR")
 ERBB2_Normal <- get_expr(df_Normal, "ERBB2")
 
-# Combiner Basal + Normal
+# Combine Basal-like and Normal-like samples
 ESR1_all  <- c(ESR1_Basal,  ESR1_Normal)
 PGR_all   <- c(PGR_Basal,   PGR_Normal)
 ERBB2_all <- c(ERBB2_Basal, ERBB2_Normal)
 
-# Vérifications
-cat("\n--- Statistiques descriptives ---\n")
+# DESCRIPTIVE STATISTICS
+cat("\n--- Descriptives Statistics ---\n")
 cat("ESR1  — min:", round(min(ESR1_all,  na.rm = TRUE), 2),
             "max:", round(max(ESR1_all,  na.rm = TRUE), 2),
            "mean:", round(mean(ESR1_all, na.rm = TRUE), 2), "\n")
@@ -66,7 +71,7 @@ cat("ERBB2 — min:", round(min(ERBB2_all, na.rm = TRUE), 2),
            "mean:", round(mean(ERBB2_all,na.rm = TRUE), 2), "\n")
 
 # ============================================================
-# BREAKDOWN PAR CUTOFF
+# SAMPLE DISTRIBUTION ACCORDING TO EXPRESSION CUTOFFS
 # ============================================================
 
 cat("\n--- Breakdown par cutoff ---\n")
@@ -84,7 +89,7 @@ cat("ERBB2 >= 10:", sum(ERBB2_all >= 10, na.rm = TRUE), "samples |",
     round(sum(ERBB2_all >= 10, na.rm = TRUE) / length(ERBB2_all) * 100, 1), "%\n")
 
 # ============================================================
-# HISTOGRAMMES — GGPLOT2 (version publication)
+# HISTOGRAMS _ PUBLICATION-READY
 # ============================================================
 
 df_plot <- data.frame(
@@ -107,7 +112,7 @@ plots <- lapply(seq_along(genes), function(i) {
   color  <- colors[i]
   label  <- labels[i]
 
-  # Proportion sous le cutoff
+  # Calculate the proportion of samples below the cutoff
   n_below <- sum(df_plot[[gene]] < cutoff, na.rm = TRUE)
   n_total <- sum(!is.na(df_plot[[gene]]))
   pct     <- round(n_below / n_total * 100, 1)
@@ -141,11 +146,11 @@ plots <- lapply(seq_along(genes), function(i) {
     )
 })
 
-# Afficher
+# Display
 grid.arrange(grobs = plots, ncol = 3)
 
 # ============================================================
-# EXPORT PDF
+# EXPORT AS PDF
 # ============================================================
 
 output_dir <- dirname(path)
@@ -157,9 +162,9 @@ grid.arrange(grobs = plots, ncol = 3,
 dev.off()
 cat("PDF sauvegardé : Threshold_Validation_ESR1_PGR_ERBB2.pdf\n")
 
-# ============================================================
-# CORRECTIF — Labels complets + marges élargies
-# ============================================================
+# ==========================================================================
+# REVISED PLOT VERSION — COMPLETE CUTOFF LABELS AND EXPANDED PLOT MARGINS
+# ==========================================================================
 
 plots <- lapply(seq_along(genes), function(i) {
   gene   <- genes[i]
@@ -182,7 +187,7 @@ plots <- lapply(seq_along(genes), function(i) {
              y        = Inf,
              label    = paste0("Cutoff = ", cutoff, "\n(", pct, "% negative)"),
              vjust    = 1.5,
-             hjust    = -0.1,        # légèrement à droite du cutoff
+             hjust    = -0.1,        # Position the label slightly to the right of the cutoff
              color    = "red",
              size     = 3.2,
              fontface = "bold") +
@@ -196,15 +201,15 @@ plots <- lapply(seq_along(genes), function(i) {
       plot.title   = element_text(hjust = 0.5, face = "bold", size = 11),
       axis.text    = element_text(size = 10),
       axis.title   = element_text(size = 11),
-      plot.margin  = margin(10, 30, 10, 10)  # marge droite élargie
+      plot.margin  = margin(10, 30, 10, 10)  # Increase right margin
     ) +
-    coord_cartesian(clip = "off")  # ← clé : empêche la coupure des labels
+    coord_cartesian(clip = "off")  # ← Prevent cutoff labels from being clipped
 })
 
-# Afficher
+# Display revised histograms
 grid.arrange(grobs = plots, ncol = 3)
 
-# Export PDF — largeur augmentée
+# Export revised figure as PDF with increased width
 pdf(paste0(dirname(path), "/Threshold_Validation_ESR1_PGR_ERBB2.pdf"),
     width  = 16,   # augmenté de 14 à 16
     height = 5)
