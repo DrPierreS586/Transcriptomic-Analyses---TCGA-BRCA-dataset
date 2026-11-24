@@ -1,393 +1,323 @@
-# ============================================================
-I.  GO & KEGG - BAA vs Others - Script complet - Filtrage DEG significatifs par FDR
-# ============================================================
 
-library(dplyr)
-library(clusterProfiler)
-library(org.Hs.eg.db)
+####################################################################################################
+# EFFECT SIZES (VOLCANO PLOTS) AND DIFFERENTIAL EXPRESSION ANALYSIS
+#				A. Pairwise comparisons & Volcano plots
+#   1. BAA-TNBC vs ASN-TNBC
+#   2. BAA-TNBC vs HLW-TNBC
+#   3. BAA-TNBC vs NHW-TNBC
+#   4. BAA-TNBC vs non-BAA TNBC
+#
+# 				B. DEG identification
+#.  1. BAA-TNBC vs non-BAA TNBC only
+####################################################################################################
+
+
+#---------------------------------------------------------------------------------------------------
+# 1. LOAD REQUIRED PACKAGES
+#---------------------------------------------------------------------------------------------------
+
+library(readxl)
+library(limma)
 library(ggplot2)
+library(ggrepel)
 
-path <- "/Users/drpierred.sarr/Desktop/TCGA-BRCA/DEGs Yann/"
 
-# ============================================================
-# Lecture et filtrage des fichiers
-# ============================================================
+#---------------------------------------------------------------------------------------------------
+# 2. IMPORT AND PREPARE DATASETS
+#---------------------------------------------------------------------------------------------------
 
-all_up <- read.table(
-  paste0(path, "DEGs_BAA_others_Upregulated.txt"),
-  header           = TRUE,
-  sep              = "\t",
-  stringsAsFactors = FALSE
+# Set working directory
+setwd("/Users/drpierred.sarr/Desktop/TCGA-BRCA")
+
+# Import dataset (genes in rows, samples in columns)
+BAA <- read_excel("BAA.xlsx", sheet = "BAA") |> as.data.frame()
+nonBAA <- read_excel("nonBAA.xlsx", sheet = "nonBAA") |> as.data.frame()
+ASN <- read_excel("ASN.xlsx", sheet = "ASN") |> as.data.frame()
+HLW <- read_excel("HLW.xlsx", sheet = "HLW") |> as.data.frame()
+NHW <- read_excel("NHW.xlsx", sheet = "NHW") |> as.data.frame()
+
+# Extract gene identifiers and sample names, then transpose expression matrices
+prepare_data <- function(df, group_name) {
+
+  genes <- make.unique(as.character(df[[1]]))
+  samples <- colnames(df)[-1]
+
+  expression <- data.frame(t(as.matrix(df[, -1, drop = FALSE])))
+  colnames(expression) <- genes
+  rownames(expression) <- samples
+
+  expression$group <- group_name
+
+  return(expression)
+}
+
+# Prepare all datasets
+BAA <- prepare_data(BAA, "BAA")
+nonBAA <- prepare_data(nonBAA, "nonBAA")
+ASN <- prepare_data(ASN, "ASN")
+HLW <- prepare_data(HLW, "HLW")
+NHW <- prepare_data(NHW, "NHW")
+
+
+#---------------------------------------------------------------------------------------------------
+# 3. COMBINE DATASETS AND PREPARE EXPRESSION MATRIX
+#---------------------------------------------------------------------------------------------------
+
+# Retain genes shared across all five datasets
+common_genes <- Reduce(
+  intersect,
+  list(
+    setdiff(colnames(BAA), "group"),
+    setdiff(colnames(nonBAA), "group"),
+    setdiff(colnames(ASN), "group"),
+    setdiff(colnames(HLW), "group"),
+    setdiff(colnames(NHW), "group")
+  )
 )
 
-all_down <- read.table(
-  paste0(path, "DEGs_BAA_others_Downregulated.txt"),
-  header           = TRUE,
-  sep              = "\t",
-  stringsAsFactors = FALSE
+# Combine all samples
+data <- rbind(
+  BAA[, c(common_genes, "group")],
+  nonBAA[, c(common_genes, "group")],
+  ASN[, c(common_genes, "group")],
+  HLW[, c(common_genes, "group")],
+  NHW[, c(common_genes, "group")]
 )
 
-# Vérifier les colonnes (tous les DEGs Up/Down dans fichier uploader. Annotation avec DEGs significatifs ONLY)
-cat("Colonnes UP   :", colnames(all_up), "\n")
-cat("Colonnes DOWN :", colnames(all_down), "\n")
-cat("Gènes totaux UP   :", nrow(all_up), "\n")
-cat("Gènes totaux DOWN :", nrow(all_down), "\n")
+# Convert expression data to numeric matrix (genes in rows, samples in columns)
+expression_matrix <- t(as.matrix(data[, common_genes]))
 
-# --- Filtrer DEGs significatifs ---
-DEGs_up_df <- all_up %>%
-  dplyr::filter(FDR < 0.05 & logFC > 1)
-
-DEGs_down_df <- all_down %>%
-  dplyr::filter(FDR < 0.05 & logFC < -1)
-
-cat("DEGs UP filtrés   :", nrow(DEGs_up_df), "\n")
-cat("DEGs DOWN filtrés :", nrow(DEGs_down_df), "\n")
-
-# --- Extraire noms de gènes ---
-DEGs_up   <- DEGs_up_df$gene
-DEGs_down <- DEGs_down_df$gene
-
-# ============================================================
-# Conversion SYMBOL → ENTREZID
-# ============================================================
-
-genes_up_entrez <- bitr(DEGs_up,
-                        fromType = "SYMBOL",
-                        toType   = "ENTREZID",
-                        OrgDb    = org.Hs.eg.db)$ENTREZID
-
-genes_down_entrez <- bitr(DEGs_down,
-                          fromType = "SYMBOL",
-                          toType   = "ENTREZID",
-                          OrgDb    = org.Hs.eg.db)$ENTREZID
-
-cat("Up entrez   :", length(genes_up_entrez), "\n")
-cat("Down entrez :", length(genes_down_entrez), "\n")
-
-# ============================================================
-# GO-BP
-# ============================================================
-
-go_bp_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "BP",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.2,
-                     readable      = TRUE)
-
-go_bp_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "BP",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.2,
-                       readable      = TRUE)
-
-cat("GO-BP UP   :", nrow(go_bp_up), "\n")
-cat("GO-BP DOWN :", nrow(go_bp_down), "\n")
-
-dotplot(go_bp_up,   showCategory = 10, title = "GO-BP | Upregulated")
-dotplot(go_bp_down, showCategory = 10, title = "GO-BP | Downregulated")
-
-# ============================================================
-# GO-CC
-# ============================================================
-
-go_cc_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "CC",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.2,
-                     readable      = TRUE)
-
-go_cc_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "CC",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.2,
-                       readable      = TRUE)
-
-cat("GO-CC UP   :", nrow(go_cc_up), "\n")
-cat("GO-CC DOWN :", nrow(go_cc_down), "\n")
-
-dotplot(go_cc_up,   showCategory = 10, title = "GO-CC | Upregulated")
-dotplot(go_cc_down, showCategory = 10, title = "GO-CC | Downregulated")
-
-# ============================================================
-# GO-MF
-# ============================================================
-
-go_mf_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "MF",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.2,
-                     readable      = TRUE)
-
-go_mf_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "MF",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.2,
-                       readable      = TRUE)
-
-cat("GO-MF UP   :", nrow(go_mf_up), "\n")
-cat("GO-MF DOWN :", nrow(go_mf_down), "\n")
-
-dotplot(go_mf_up,   showCategory = 10, title = "GO-MF | Upregulated")
-dotplot(go_mf_down, showCategory = 10, title = "GO-MF | Downregulated")
-# ============================================================
-# KEGG
-# ============================================================
-
-kegg_up <- enrichKEGG(gene          = genes_up_entrez,
-                      organism      = "hsa",
-                      pAdjustMethod = "BH",
-                      pvalueCutoff  = 0.05,
-                      qvalueCutoff  = 0.2)
-
-kegg_down <- enrichKEGG(gene          = genes_down_entrez,
-                        organism      = "hsa",
-                        pAdjustMethod = "BH",
-                        pvalueCutoff  = 0.05,
-                        qvalueCutoff  = 0.2)
-
-cat("KEGG UP   :", nrow(kegg_up), "\n")
-cat("KEGG DOWN :", nrow(kegg_down), "\n")
-
-dotplot(kegg_up,   showCategory = 10, title = "KEGG | Upregulated")
-dotplot(kegg_down, showCategory = 10, title = "KEGG | Downregulated")
-
-# ============================================================
-# Export CSV
-# ============================================================
-
-if (!is.null(go_bp_up)   && nrow(go_bp_up) > 0)   write.csv(as.data.frame(go_bp_up),   paste0(path, "GO_BP_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_bp_down) && nrow(go_bp_down) > 0)  write.csv(as.data.frame(go_bp_down), paste0(path, "GO_BP_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(go_cc_up)   && nrow(go_cc_up) > 0)   write.csv(as.data.frame(go_cc_up),   paste0(path, "GO_CC_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_cc_down) && nrow(go_cc_down) > 0)  write.csv(as.data.frame(go_cc_down), paste0(path, "GO_CC_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(go_mf_up)   && nrow(go_mf_up) > 0)   write.csv(as.data.frame(go_mf_up),   paste0(path, "GO_MF_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_mf_down) && nrow(go_mf_down) > 0)  write.csv(as.data.frame(go_mf_down), paste0(path, "GO_MF_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(kegg_up)    && nrow(kegg_up) > 0)    write.csv(as.data.frame(kegg_up),    paste0(path, "KEGG_UP_BAA_vs_Others.csv"),    row.names = FALSE)
-if (!is.null(kegg_down)  && nrow(kegg_down) > 0)   write.csv(as.data.frame(kegg_down),  paste0(path, "KEGG_DOWN_BAA_vs_Others.csv"),  row.names = FALSE)
-
-cat("\n--- Résumé fichiers générés ---\n")
-cat("PDF 1 : GO_BP_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 2 : GO_BP_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 3 : GO_CC_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 4 : GO_CC_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 5 : GO_MF_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 6 : GO_MF_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 7 : KEGG_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 8 : KEGG_Downregulated_BAA_vs_Others.pdf\n")
-💡 Si tes fichiers TXT contiennent déjà uniquement les DEGs significatifs, retire les lignes dplyr::filter() et utilise directement DEGs_up <- all_up$gene.
-
-
-
-# ============================================================
-II.  GO & KEGG - BAA vs Others - Script complet - Filtrage DEG significatifs par p-value
-# ============================================================
-
-library(dplyr)
-library(clusterProfiler)
-library(org.Hs.eg.db)
-library(ggplot2)
-
-path <- "/Users/drpierred.sarr/Desktop/TCGA-BRCA/DEGs Yann/"
-
-# ============================================================
-# Lecture des fichiers
-# ============================================================
-
-all_up <- read.table(
-  paste0(path, "DEGs_BAA_others_Upregulated.txt"),
-  header           = TRUE,
-  sep              = "\t",
-  stringsAsFactors = FALSE
+# Define group factor
+group <- factor(
+  data$group,
+  levels = c("BAA", "nonBAA", "ASN", "HLW", "NHW")
 )
 
-all_down <- read.table(
-  paste0(path, "DEGs_BAA_others_Downregulated.txt"),
-  header           = TRUE,
-  sep              = "\t",
-  stringsAsFactors = FALSE
+
+#---------------------------------------------------------------------------------------------------
+# 4. DIFFERENTIAL EXPRESSION ANALYSIS USING LIMMA
+#---------------------------------------------------------------------------------------------------
+
+# Create design matrix
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+
+# Define pairwise contrasts (BAA is the reference group in all comparisons)
+contrasts <- makeContrasts(
+  BAA_vs_ASN = BAA - ASN,
+  BAA_vs_HLW = BAA - HLW,
+  BAA_vs_NHW = BAA - NHW,
+  BAA_vs_nonBAA = BAA - nonBAA,
+  levels = design
 )
 
-cat("Colonnes UP   :", colnames(all_up), "\n")
-cat("Colonnes DOWN :", colnames(all_down), "\n")
-cat("Gènes totaux UP   :", nrow(all_up), "\n")
-cat("Gènes totaux DOWN :", nrow(all_down), "\n")
-
-# ============================================================
-# Filtrer DEGs significatifs par p-value
-# ============================================================
-
-DEGs_up_df <- all_up %>%
-  dplyr::filter(pvalue < 0.05 & logFC > 1)
-
-DEGs_down_df <- all_down %>%
-  dplyr::filter(pvalue < 0.05 & logFC < -1)
-
-cat("DEGs UP filtrés   :", nrow(DEGs_up_df), "\n")
-cat("DEGs DOWN filtrés :", nrow(DEGs_down_df), "\n")
-
-DEGs_up   <- DEGs_up_df$gene
-DEGs_down <- DEGs_down_df$gene
-
-# ============================================================
-# Conversion SYMBOL → ENTREZID
-# ============================================================
-
-genes_up_entrez <- bitr(DEGs_up,
-                        fromType = "SYMBOL",
-                        toType   = "ENTREZID",
-                        OrgDb    = org.Hs.eg.db)$ENTREZID
-
-genes_down_entrez <- bitr(DEGs_down,
-                          fromType = "SYMBOL",
-                          toType   = "ENTREZID",
-                          OrgDb    = org.Hs.eg.db)$ENTREZID
-
-cat("Up entrez   :", length(genes_up_entrez), "\n")
-cat("Down entrez :", length(genes_down_entrez), "\n")
-
-# ============================================================
-# GO-BP
-# ============================================================
-
-go_bp_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "BP",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.20,
-                     readable      = TRUE)
-
-go_bp_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "BP",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.20,
-                       readable      = TRUE)
-
-cat("GO-BP UP   :", nrow(go_bp_up), "\n")
-cat("GO-BP DOWN :", nrow(go_bp_down), "\n")
-
-dotplot(go_bp_up,   showCategory = 10, title = "GO-BP | Upregulated")
-dotplot(go_bp_down, showCategory = 10, title = "GO-BP | Downregulated")
-# ============================================================
-# GO-CC
-# ============================================================
-
-go_cc_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "CC",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.20,
-                     readable      = TRUE)
-
-go_cc_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "CC",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.20,
-                       readable      = TRUE)
-
-cat("GO-CC UP   :", nrow(go_cc_up), "\n")
-cat("GO-CC DOWN :", nrow(go_cc_down), "\n")
-
-dotplot(go_cc_up,   showCategory = 10, title = "GO-CC | Upregulated")
-dotplot(go_cc_down, showCategory = 10, title = "GO-CC | Downregulated")
-
-# ============================================================
-# GO-MF
-# ============================================================
-
-go_mf_up <- enrichGO(gene          = genes_up_entrez,
-                     OrgDb         = org.Hs.eg.db,
-                     ont           = "MF",
-                     pAdjustMethod = "BH",
-                     pvalueCutoff  = 0.05,
-                     qvalueCutoff  = 0.20,
-                     readable      = TRUE)
-
-go_mf_down <- enrichGO(gene          = genes_down_entrez,
-                       OrgDb         = org.Hs.eg.db,
-                       ont           = "MF",
-                       pAdjustMethod = "BH",
-                       pvalueCutoff  = 0.05,
-                       qvalueCutoff  = 0.20,
-                       readable      = TRUE)
-
-cat("GO-MF UP   :", nrow(go_mf_up), "\n")
-cat("GO-MF DOWN :", nrow(go_mf_down), "\n")
-
-dotplot(go_mf_up,   showCategory = 10, title = "GO-MF | Upregulated")
-dotplot(go_mf_down, showCategory = 10, title = "GO-MF | Downregulated")
-# ============================================================
-# KEGG
-# ============================================================
-
-kegg_up <- enrichKEGG(gene          = genes_up_entrez,
-                      organism      = "hsa",
-                      pAdjustMethod = "BH",
-                      pvalueCutoff  = 0.05,
-                      qvalueCutoff  = 0.20)
-
-kegg_down <- enrichKEGG(gene          = genes_down_entrez,
-                        organism      = "hsa",
-                        pAdjustMethod = "BH",
-                        pvalueCutoff  = 0.05,
-                        qvalueCutoff  = 0.20)
-
-cat("KEGG UP   :", nrow(kegg_up), "\n")
-cat("KEGG DOWN :", nrow(kegg_down), "\n")
-
-dotplot(kegg_up,   showCategory = 10, title = "KEGG | Upregulated")
-dotplot(kegg_down, showCategory = 10, title = "KEGG | Downregulated")
-
-# ============================================================
-# Export CSV
-# ============================================================
-
-if (!is.null(go_bp_up)   && nrow(go_bp_up) > 0)   write.csv(as.data.frame(go_bp_up),   paste0(path, "GO_BP_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_bp_down) && nrow(go_bp_down) > 0)  write.csv(as.data.frame(go_bp_down), paste0(path, "GO_BP_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(go_cc_up)   && nrow(go_cc_up) > 0)   write.csv(as.data.frame(go_cc_up),   paste0(path, "GO_CC_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_cc_down) && nrow(go_cc_down) > 0)  write.csv(as.data.frame(go_cc_down), paste0(path, "GO_CC_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(go_mf_up)   && nrow(go_mf_up) > 0)   write.csv(as.data.frame(go_mf_up),   paste0(path, "GO_MF_UP_BAA_vs_Others.csv"),   row.names = FALSE)
-if (!is.null(go_mf_down) && nrow(go_mf_down) > 0)  write.csv(as.data.frame(go_mf_down), paste0(path, "GO_MF_DOWN_BAA_vs_Others.csv"), row.names = FALSE)
-if (!is.null(kegg_up)    && nrow(kegg_up) > 0)    write.csv(as.data.frame(kegg_up),    paste0(path, "KEGG_UP_BAA_vs_Others.csv"),    row.names = FALSE)
-if (!is.null(kegg_down)  && nrow(kegg_down) > 0)   write.csv(as.data.frame(kegg_down),  paste0(path, "KEGG_DOWN_BAA_vs_Others.csv"),  row.names = FALSE)
-
-cat("\n--- Résumé fichiers générés ---\n")
-cat("PDF 1 : GO_BP_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 2 : GO_BP_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 3 : GO_CC_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 4 : GO_CC_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 5 : GO_MF_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 6 : GO_MF_Downregulated_BAA_vs_Others.pdf\n")
-cat("PDF 7 : KEGG_Upregulated_BAA_vs_Others.pdf\n")
-cat("PDF 8 : KEGG_Downregulated_BAA_vs_Others.pdf\n")
+# Fit linear model and apply empirical Bayes moderation
+fit <- lmFit(expression_matrix, design)
+fit <- contrasts.fit(fit, contrasts)
+fit <- eBayes(fit)
 
 
+#---------------------------------------------------------------------------------------------------
+# 5. EXTRACT RESULTS FOR EACH PAIRWISE COMPARISON
+#---------------------------------------------------------------------------------------------------
+
+results_BAA_ASN <- topTable(
+  fit, coef = "BAA_vs_ASN",
+  number = Inf, adjust.method = "BH", sort.by = "P"
+)
+
+results_BAA_HLW <- topTable(
+  fit, coef = "BAA_vs_HLW",
+  number = Inf, adjust.method = "BH", sort.by = "P"
+)
+
+results_BAA_NHW <- topTable(
+  fit, coef = "BAA_vs_NHW",
+  number = Inf, adjust.method = "BH", sort.by = "P"
+)
+
+results_BAA_nonBAA <- topTable(
+  fit, coef = "BAA_vs_nonBAA",
+  number = Inf, adjust.method = "BH", sort.by = "P"
+)
 
 
+#---------------------------------------------------------------------------------------------------
+# 6. GENERATE VOLCANO PLOTS
+#---------------------------------------------------------------------------------------------------
+
+# Create output directory
+dir.create("results", showWarnings = FALSE)
+
+# Volcano plot function
+plot_volcano <- function(results, comparison, y_metric = "FDR") {
+
+  results$Gene <- rownames(results)
+
+  # Define y-axis using either adjusted or unadjusted p-values
+  if (y_metric == "FDR") {
+    results$y_value <- -log10(pmax(results$adj.P.Val, .Machine$double.xmin))
+    y_label <- expression(-log[10](FDR))
+  } else {
+    results$y_value <- -log10(pmax(results$P.Value, .Machine$double.xmin))
+    y_label <- expression(-log[10](p-value))
+  }
+
+  # Classify genes according to statistical significance and effect size
+  results$Regulation <- "Not significant"
+
+  results$Regulation[
+    results$y_value > -log10(0.05) & results$logFC > 1
+  ] <- "Upregulated in BAA"
+
+  results$Regulation[
+    results$y_value > -log10(0.05) & results$logFC < -1
+  ] <- "Downregulated in BAA"
+
+  results$Regulation <- factor(
+    results$Regulation,
+    levels = c(
+      "Upregulated in BAA",
+      "Downregulated in BAA",
+      "Not significant"
+    )
+  )
+
+  # Generate volcano plot
+  volcano <- ggplot(
+    results,
+    aes(x = logFC, y = y_value, color = Regulation)
+  ) +
+    geom_point(size = 1.5, alpha = 0.7) +
+    geom_vline(
+      xintercept = c(-1, 1),
+      linetype = "dashed",
+      color = "grey40"
+    ) +
+    geom_hline(
+      yintercept = -log10(0.05),
+      linetype = "dashed",
+      color = "grey40"
+    ) +
+    scale_color_manual(
+      values = c(
+        "Upregulated in BAA" = "#D73027",
+        "Downregulated in BAA" = "#4575B4",
+        "Not significant" = "grey75"
+      )
+    ) +
+    labs(
+      title = comparison,
+      x = expression(log[2]~Fold~Change),
+      y = y_label,
+      color = NULL
+    ) +
+    theme_classic() +
+    theme(
+      plot.title = element_text(
+        face = "bold",
+        hjust = 0.5
+      ),
+      legend.position = "bottom"
+    )
+
+  print(volcano)
+
+  # Save volcano plot
+  ggsave(
+    filename = paste0(
+      "results/Volcano_",
+      gsub("[^A-Za-z0-9]+", "_", comparison),
+      ".png"
+    ),
+    plot = volcano,
+    width = 7,
+    height = 6,
+    dpi = 300
+  )
+}
 
 
+# Generate the four volcano plots
+plot_volcano(
+  results_BAA_ASN,
+  "BAA-TNBC vs ASN-TNBC",
+  y_metric = "FDR"
+)
+
+plot_volcano(
+  results_BAA_HLW,
+  "BAA-TNBC vs HLW-TNBC",
+  y_metric = "p-value"
+)
+
+plot_volcano(
+  results_BAA_NHW,
+  "BAA-TNBC vs NHW-TNBC",
+  y_metric = "FDR"
+)
+
+plot_volcano(
+  results_BAA_nonBAA,
+  "BAA-TNBC vs non-BAA TNBC",
+  y_metric = "FDR"
+)
 
 
+#---------------------------------------------------------------------------------------------------
+#  IDENTIFICATION AND EXPORT OF DEGs: BAA-TNBC vs NON-BAA TNBC
+#---------------------------------------------------------------------------------------------------
 
+# Identify significantly differentially expressed genes
+# Criteria: FDR < 0.05 and |log2FC| > 1
 
+DEGs <- results_BAA_nonBAA[
+  results_BAA_nonBAA$adj.P.Val < 0.05 &
+    abs(results_BAA_nonBAA$logFC) > 1,
+]
 
+# Separate upregulated and downregulated genes in BAA-TNBC
+DEGs_up <- DEGs[
+  DEGs$logFC > 1,
+  c("logFC", "adj.P.Val", "P.Value"),
+  drop = FALSE
+]
 
+DEGs_down <- DEGs[
+  DEGs$logFC < -1,
+  c("logFC", "adj.P.Val", "P.Value"),
+  drop = FALSE
+]
 
+# Add gene identifiers as a column
+DEGs_up$Gene <- rownames(DEGs_up)
+DEGs_down$Gene <- rownames(DEGs_down)
 
+# Arrange output columns
+DEGs_up <- DEGs_up[, c("Gene", "logFC", "adj.P.Val", "P.Value")]
+DEGs_down <- DEGs_down[, c("Gene", "logFC", "adj.P.Val", "P.Value")]
 
+# Rename columns for clarity
+colnames(DEGs_up) <- c("Gene", "Log2FC", "FDR", "P_value")
+colnames(DEGs_down) <- c("Gene", "Log2FC", "FDR", "P_value")
+
+# Export upregulated and downregulated gene lists as tab-delimited text files
+write.table(
+  DEGs_up,
+  file = "results/DEGs_BAA_vs_nonBAA_upregulated.txt",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+write.table(
+  DEGs_down,
+  file = "results/DEGs_BAA_vs_nonBAA_downregulated.txt",
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
+
+# Display DEG counts
+cat("Upregulated DEGs in BAA-TNBC:", nrow(DEGs_up), "\n")
+cat("Downregulated DEGs in BAA-TNBC:", nrow(DEGs_down), "\n")
